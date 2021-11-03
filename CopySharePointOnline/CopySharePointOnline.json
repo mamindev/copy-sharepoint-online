@@ -1,0 +1,220 @@
+{
+	"$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"workspaceName": {
+			"type": "string",
+			"metadata": "Workspace name",
+			"defaultValue": "amin-synapse-01"
+		},
+		"Sharepoint": {
+			"type": "string"
+		},
+		"amin-synapse-01-WorkspaceDefaultStorage": {
+			"type": "string"
+		}
+	},
+	"variables": {
+		"workspaceId": "[concat('Microsoft.Synapse/workspaces/', parameters('workspaceName'))]"
+	},
+	"resources": [
+		{
+			"name": "[concat(parameters('workspaceName'), '/CopySharePointOnline')]",
+			"type": "Microsoft.Synapse/workspaces/pipelines",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"activities": [
+					{
+						"name": "GetBearerToken",
+						"type": "WebActivity",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"url": {
+								"value": "https://accounts.accesscontrol.windows.net/@{pipeline().parameters.tenantId}/tokens/OAuth/2",
+								"type": "Expression"
+							},
+							"connectVia": {
+								"referenceName": "AutoResolveIntegrationRuntime",
+								"type": "IntegrationRuntimeReference"
+							},
+							"method": "POST",
+							"headers": {
+								"Content-Type": "application/x-www-form-urlencoded"
+							},
+							"body": {
+								"value": "@concat(\n'grant_type=client_credentials',\n'&client_id=',\npipeline().parameters.clientId,\n'@',\npipeline().parameters.tenantId,\n'&client_secret=',\npipeline().parameters.clientSecret,\n'&resource=00000003-0000-0ff1-ce00-000000000000/',\npipeline().parameters.tenantName,\n'.sharepoint.com',\n'@',\npipeline().parameters.tenantId)",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "CopySPOData",
+						"type": "Copy",
+						"dependsOn": [
+							{
+								"activity": "GetBearerToken",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "BinarySource",
+								"storeSettings": {
+									"type": "HttpReadSettings",
+									"requestMethod": "GET",
+									"additionalHeaders": {
+										"value": "@{concat('Authorization: Bearer ', activity('GetBearerToken').output.access_token)}",
+										"type": "Expression"
+									},
+									"requestTimeout": ""
+								},
+								"formatSettings": {
+									"type": "BinaryReadSettings"
+								}
+							},
+							"sink": {
+								"type": "BinarySink",
+								"storeSettings": {
+									"type": "AzureBlobFSWriteSettings",
+									"copyBehavior": "FlattenHierarchy"
+								}
+							},
+							"enableStaging": false
+						},
+						"inputs": [
+							{
+								"referenceName": "sharepoint",
+								"type": "DatasetReference",
+								"parameters": {
+									"siteName": {
+										"value": "@pipeline().parameters.sharepointSite",
+										"type": "Expression"
+									},
+									"fileRelativePath": {
+										"value": "@pipeline().parameters.fileRelativePath",
+										"type": "Expression"
+									}
+								}
+							}
+						],
+						"outputs": [
+							{
+								"referenceName": "adls",
+								"type": "DatasetReference",
+								"parameters": {
+									"filePath": {
+										"value": "@pipeline().parameters.fileRelativePath",
+										"type": "Expression"
+									}
+								}
+							}
+						]
+					}
+				],
+				"parameters": {
+					"tenantId": {
+						"type": "string"
+					},
+					"clientId": {
+						"type": "string"
+					},
+					"tenantName": {
+						"type": "string"
+					},
+					"clientSecret": {
+						"type": "string"
+					},
+					"fileRelativePath": {
+						"type": "string"
+					},
+					"sharepointSite": {
+						"type": "string"
+					}
+				},
+				"annotations": []
+			},
+			"dependsOn": [
+				"[concat(variables('workspaceId'), '/datasets/sharepoint')]",
+				"[concat(variables('workspaceId'), '/datasets/adls')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/sharepoint')]",
+			"type": "Microsoft.Synapse/workspaces/datasets",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "[parameters('Sharepoint')]",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"siteName": {
+						"type": "string"
+					},
+					"fileRelativePath": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "Binary",
+				"typeProperties": {
+					"location": {
+						"type": "HttpServerLocation",
+						"relativeUrl": {
+							"value": "/teams/@{dataset().siteName}/_api/web/GetFileByServerRelativeUrl('@{dataset().fileRelativePath}')/$value",
+							"type": "Expression"
+						}
+					}
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('workspaceName'), '/adls')]",
+			"type": "Microsoft.Synapse/workspaces/datasets",
+			"apiVersion": "2019-06-01-preview",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "[parameters('amin-synapse-01-WorkspaceDefaultStorage')]",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"filePath": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "Binary",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@dataset().filePath",
+							"type": "Expression"
+						},
+						"fileSystem": "main"
+					}
+				}
+			},
+			"dependsOn": []
+		}
+	]
+}
